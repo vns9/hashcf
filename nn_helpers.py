@@ -41,11 +41,13 @@ def generator(sess, handle, batchsize, record_paths, is_test):
     dataset = tf.data.Dataset.from_tensor_slices(record_paths)
     #if not is_test:   
     dataset = dataset.repeat()
+    #else:
+    #    dataset = dataset.repeat(2)
     dataset = dataset.shuffle(100)
     dataset = dataset.flat_map(tf.data.TFRecordDataset)
     dataset = dataset.map(extract_fn, num_parallel_calls=3)
-    #if not is_test:
-    dataset = dataset.shuffle(30000)
+    if not is_test:
+        dataset = dataset.shuffle(30000)
     dataset = dataset.batch(batchsize)
     dataset = dataset.prefetch(10)
     iterator = dataset.make_initializable_iterator()

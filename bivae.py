@@ -176,6 +176,9 @@ class Model():
         user, i1, i1r, user_content, i1_content = self._extract(sess, item_emb, user_emb, user_content_matrix, item_content_matrix, batchsize)
         i1_content = tf.reshape(i1_content, [batchsize, 512])
         user_content = tf.reshape(user_content, [batchsize, 512])
+        
+        #i1_content = tf.cond(is_training, lambda: tf.zeros_like(i1_content), lambda: tf.zeros_like(i1_content))
+        #user_content = tf.cond(is_training, lambda: tf.zeros_like(user_content), lambda: tf.zeros_like(user_content))
 
         i1_content_hashcode, i1_content_cont = item_encoder(i1_content, args["vae_units"], args["vae_layers"])
         e = tf.random.normal([batchsize, args["bits"]])

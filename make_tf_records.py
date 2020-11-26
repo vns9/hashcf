@@ -100,13 +100,17 @@ def make_all_pairs_test(full_matrix, pairs):
 def single_pair_tfrecord_maker(ratings, notrated, full_matrix,
                                path,
                                k):
-    print(path, k)
+    #print(path, k)
+    '''
+    # I assume there is a bug here
     if "test" in path:
         print("specific test handling")
         rated_samples = make_all_pairs_test(full_matrix, 1)
     else:
         rated_samples = make_all_pairs(ratings, notrated, full_matrix, 1)
-    print(path, k, len(rated_samples))
+    '''
+    rated_samples = make_all_pairs(ratings, notrated, full_matrix, 1)
+    #print(path, k, len(rated_samples))
     process_tfrecord(path + "_" + str(k) + ".tfrecord", rated_samples, make_record_sample)
 
 def parallelize(rated, unrated, full_matrix, path, k_pairs):
@@ -123,11 +127,13 @@ def main():
     path = 'ratings_contentaware_full.mat'
     vals = loadmat(path)
 
+    '''
     train_matrix = csr_matrix(vals["train_matrix"])
     nonzeros_rows, nonzeros_cols = train_matrix.nonzero()
     num_users, num_items = train_matrix.shape[0], train_matrix.shape[1]
 
     print(num_users, num_items, np.max(nonzeros_cols), np.min(nonzeros_cols))
+    '''
 
     full_matrix = csr_matrix(vals["full_matrix"])
 

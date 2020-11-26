@@ -1,5 +1,3 @@
-# ranking metrics by Mathieu Blondel, November 2013
-# License: BSD 3 clause
 import numpy as np
 
 def dcg_at_k(r, k, method):
@@ -47,3 +45,8 @@ def mrr(labels, distances):
     rank = np.where(labels_ordered == max_rating)[0][0] + 1
 
     return 1/rank
+
+def hit(labels, distances):
+    labels = np.array(labels)
+    distances = np.array(distances)
+    return np.sum(labels == distances)/len(labels)
