@@ -26,15 +26,18 @@ def extract_fn(data_record):
 
     for key in ["user","i1","i2","i_unrated"]:
         sample[key] = tf.cast(sample[key], tf.int32)
+    
+    
 
     sample["i1_rating"] = tf.cast(sample["i1_rating"], tf.float32)
     sample["i2_rating"] = tf.cast(sample["i2_rating"], tf.float32)
+    sample["ogt"] = tf.cond(tf.cast(sample["i1_rating"] > sample["i2_rating"], tf.bool), lambda: (1,2), lambda: (2,1))
 
-    return tuple([sample[key] for key in ["user", "i1", "i2", "i_unrated", "i1_rating", "i2_rating"]])
+    return tuple([sample[key] for key in ["user", "i1", "i2", "i_unrated", "i1_rating", "i2_rating", "ogt"]])
 
 def generator(sess, handle, batchsize, record_paths, is_test):
 
-    output_t = tuple([tf.int32, tf.int32, tf.int32, tf.int32, tf.float32, tf.float32])
+    output_t = tuple([tf.int32, tf.int32, tf.int32, tf.int32, tf.float32, tf.float32, (tf.int32, tf.int32)])
     #s = tf.TensorShape([None,])
     #output_s = tuple([s for _ in output_t])
 

@@ -7,7 +7,7 @@ import pickle
 import glob
 import os
 from nn_helpers import generator
-from bivae import Model as pModel
+from ptrvae import Model as pModel
 import numpy as np
 import time
 from helpers import ndcg_score, mrr, hit
@@ -95,7 +95,7 @@ def eval_hashing(full_matrix_ratings, test_samples, item_matrix, user_matrix, nu
         iinps.append([items_gt, args["bits"]-ham_dists])
 
         indcgs = [ndcg_score(inp[0], inp[1]) for inp in iinps]
-        if shannon>5.8:
+        if shannon>6.2:
             inps.append([items_gt, args["bits"]-ham_dists])
         else:
             pass
@@ -257,6 +257,7 @@ def main():
         user_sample = sample[0]        
         item_sample = sample[1]
         item_rating = sample[4]
+        ogt = sample[6]
         
         is_training = tf.placeholder(tf.bool, name="is_training")
         anneal_val = tf.placeholder(tf.float32, name="anneal_val", shape=())
@@ -273,7 +274,7 @@ def main():
         content_matrix = item_content_matrix
         loss, loss_no_anneal, scores, item_embedding, user_embedding, \
             reconloss = model.make_network(sess, word_embedding_matrix, importance_embedding_matrix, user_content_matrix, item_content_matrix, item_emb_matrix, user_emb_matrix,
-                                           is_training, args, max_rating, anneal_val, anneal_val_vae, batch_placeholder)
+                                           is_training, args, max_rating, anneal_val, anneal_val_vae, batch_placeholder, ogt)
 
         step = tf.Variable(0, trainable=False)
         lr = tf.train.exponential_decay(args["lr"], step, 100000, args["decay_rate"], staircase=True, name="lr")
