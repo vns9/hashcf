@@ -20,13 +20,14 @@ from scipy.special import entr
 import time
 import pandas as pd
 from sklearn.metrics import ndcg_score as ndcg_score1
+import statistics
 
 
 def fprint(output_file, text):
     with open(output_file, "a") as myfile:
         myfile.write(str(text) + "\n")
 
-def onepass_test(sess, eval_list, some_handle, num_samples, eval_batchsize,
+def onepass_test(sess, eval_list, l1_act, l2_act, some_handle, num_samples, eval_batchsize,
                  handle, anneal_val, anneal_val_vae, batch_placeholder, is_training, force_selfmask, args, num_items, num_users,
                  full_matrix_ratings, test_samples):
 
@@ -40,13 +41,24 @@ def onepass_test(sess, eval_list, some_handle, num_samples, eval_batchsize,
 
     all_item_ids = []
     all_user_ids = []
+    l1list = []
+    l2list = []
     while not valdone:
-        lossval, hamdist, userval, item_ratingval, itemsample, item_emb, user_emb, \
-            lossval_recon = sess.run(eval_list, feed_dict={handle: some_handle, is_training: False,
+        [lossval, hamdist, userval, item_ratingval, itemsample, item_emb, user_emb, \
+            lossval_recon], l1_act_val, l2_act_val = sess.run([eval_list, l1_act, l2_act], feed_dict={handle: some_handle, is_training: False,
                                                                         anneal_val: 0,
                                                                         anneal_val_vae: 0,
                                                                         batch_placeholder: min(20000, eval_batchsize)})
 
+        temp_list = []
+        for i in range(l1_act_val.shape[0]):
+                t1 = [x+1 for x in l1_act_val[i]]
+                t2 = [x+1 for x in l2_act_val[i]]
+                print(t1)
+                print(t2)
+                temp_list.append(ndcg_score(t1, t2))
+        l1list.append(statistics.mean(temp_list))
+        l2list.append(0)
         valcounter += 1
         total -= len(userval)
 
@@ -70,7 +82,8 @@ def onepass_test(sess, eval_list, some_handle, num_samples, eval_batchsize,
     assert(len(set(all_user_ids)) == num_users)
     #assert(len(set(all_item_ids)) == num_items)
     
-    ndcgs, mrrs, hits, mse = eval_hashing(full_matrix_ratings, test_samples[0], item_matrix, user_matrix, num_users, num_items, all_user_ids, all_item_ids, args)
+    ndcgs, mse = eval_hashing(full_matrix_ratings, test_samples[0], item_matrix, user_matrix, num_users, num_items, all_user_ids, all_item_ids, args)
+    print('PTR NDCG - ',np.mean(l1list))
     return np.mean(ndcgs,0), mse, item_matrix, user_matrix
 
 def eval_hashing(full_matrix_ratings, test_samples, item_matrix, user_matrix, num_users, num_items, user_list, item_list, args):
@@ -83,7 +96,6 @@ def eval_hashing(full_matrix_ratings, test_samples, item_matrix, user_matrix, nu
         item_ids = items
         items = item_matrix[item_ids]
         user_emb_01 = (user_emb+1)/2
-        iinps = []
         if args["force_selfmask"]:
             ham_dists = np.array([np.sum(user_emb * ( 2*((item+1)/2 * user_emb_01) - 1)) for item in items])
         else:
@@ -92,13 +104,9 @@ def eval_hashing(full_matrix_ratings, test_samples, item_matrix, user_matrix, nu
         pgti = items_gt / items_gt.sum()
         shannon = -np.sum(pgti*np.log2(pgti))
         gt_entropies.append(shannon)
-        iinps.append([items_gt, args["bits"]-ham_dists])
-
-        indcgs = [ndcg_score(inp[0], inp[1]) for inp in iinps]
         if shannon>6.2:
             inps.append([items_gt, args["bits"]-ham_dists])
-        else:
-            pass
+            #print(items_gt)
         tmp_gt = 2*args["bits"] * items_gt/5.0 - args["bits"]
         mse = ((tmp_gt - ham_dists)**2) / (args["bits"]*args["bits"])#(args["batchsize"])  
         mses += mse.tolist()
@@ -106,9 +114,7 @@ def eval_hashing(full_matrix_ratings, test_samples, item_matrix, user_matrix, nu
     print(describer.describe())
     #print(gt_entropies)
     ndcgs = [ndcg_score(inp[0], inp[1]) for inp in inps]
-    mrrs = [mrr(inp[0], inp[1]) for inp in inps]
-    hits = [hit(inp[0], inp[1]) for inp in inps]
-    return ndcgs, mrrs, hits, np.mean(mses)
+    return ndcgs, np.mean(mses)
 
 
 def onepass(sess, eval_list, some_handle, num_samples, eval_batchsize, handle, anneal_val, anneal_val_vae, batch_placeholder, is_training, force_selfmask, args):
@@ -273,7 +279,7 @@ def main():
         importance_embedding_matrix = model.make_importance_embedding(8000)
         content_matrix = item_content_matrix
         loss, loss_no_anneal, scores, item_embedding, user_embedding, \
-            reconloss = model.make_network(sess, word_embedding_matrix, importance_embedding_matrix, user_content_matrix, item_content_matrix, item_emb_matrix, user_emb_matrix,
+            reconloss, l1_act, l2_act = model.make_network(sess, word_embedding_matrix, importance_embedding_matrix, user_content_matrix, item_content_matrix, item_emb_matrix, user_emb_matrix,
                                            is_training, args, max_rating, anneal_val, anneal_val_vae, batch_placeholder, ogt)
 
         step = tf.Variable(0, trainable=False)
@@ -295,6 +301,8 @@ def main():
         losses_train_no_anneal = []
         reconlosses_train = []
         times = []
+        l1_act_list = []
+        l2_act_list = []
         anneal = args["anneal_val"]
         anneal_vae = args["annealing_max"]
 
@@ -309,7 +317,7 @@ def main():
         all_val_ndcg = []
         while running:
             start = time.time()
-            lossval, loss_no_anneal_val, reconlossval, hamdist, _= sess.run([loss, loss_no_anneal, reconloss, scores, train_step], feed_dict={handle: training_handle, is_training: True,
+            lossval, loss_no_anneal_val, reconlossval, hamdist, _, l1_act_val, l2_act_val= sess.run([loss, loss_no_anneal, reconloss, scores, train_step, l1_act, l2_act], feed_dict={handle: training_handle, is_training: True,
                                                                                   anneal_val: anneal,
                                                                                   anneal_val_vae: anneal_vae,
                                                                                   batch_placeholder: args["batchsize"]})
@@ -317,17 +325,23 @@ def main():
             losses_train.append(lossval)
             losses_train_no_anneal.append(loss_no_anneal_val)
             reconlosses_train.append(reconlossval)
+            temp_list = []
+            for i in range(l1_act_val.shape[0]):
+                temp_list.append(np.mean(ndcg_score(l1_act_val[i], l2_act_val[i])))
+            l1_act_list.append(statistics.mean(temp_list))
+            l2_act_list.append(l2_act_val)
             counter += 1
             anneal_vae = max(anneal_vae-args["annealing_decrement"], args["annealing_min"])
             anneal = anneal * 0.9999
             if counter % 1000 == 0: 
-                print("train", np.mean(losses_train), np.mean(losses_train_no_anneal), np.mean(reconlosses_train))#, counter * args["batchsize"] / train_samples, np.mean(times), anneal)
+                print("train", np.mean(l1_act_list), np.mean(l2_act_list), np.mean(losses_train), np.mean(losses_train_no_anneal), np.mean(reconlosses_train))#, counter * args["batchsize"] / train_samples, np.mean(times), anneal)
                 fprint(args["ofile"], " ".join([str(v) for v in ["train", np.mean(losses_train), np.mean(losses_train_no_anneal), counter * args["batchsize"] / train_samples, np.mean(times), anneal]]) )
                 losses_train = []
                 times = []
                 losses_train_no_anneal = []
                 reconlosses_train = []
-
+                l1_act_list = []
+                l2_act_list = []
                 '''
                 sess.run(val_iter.initializer)
                 losses_val, val_ndcg, losses_val_recon, losses_val_uneq, losses_val_eq, NN, allndcgs, losses_val_vae = onepass(sess, eval_list, val_handle, val_samples, eval_batchsize, handle, anneal_val, anneal_val_vae, batch_placeholder, is_training, args["force_selfmask"], args)
@@ -345,7 +359,7 @@ def main():
                 '''
                 #if patience_counter == 0:
                 sess.run(test_iter.initializer)
-                test_ndcgs, test_mse, user_matrix_vals, item_matrix_vals = onepass_test(sess, eval_list, test_handle,
+                test_ndcgs, test_mse, user_matrix_vals, item_matrix_vals = onepass_test(sess, eval_list, l1_act, l2_act, test_handle,
                                 test_samples, eval_batchsize,
                                 handle, anneal_val, anneal_val_vae, batch_placeholder,
                                 is_training, args["force_selfmask"], args,

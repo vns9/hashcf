@@ -13,16 +13,38 @@ def dcg_at_k(r, k, method):
             raise ValueError('method must be 0 or 1.')
     return 0.
 
-def ndcg_score(labels, distances, k=10, ks=[2,4,6,8,10]):
+def ndcg_score(labels, distances, k=10, ks=[2]):
     '''
     :param labels: ratings - higher is better
     :param distances: hamming distances, lower is better
     :param k:
     :return: ndcg@k
     '''
+    # ks=[]
+    # labels1 = []
+    # distances1 = []
+    # for i in range(len(labels)):
+    #     if labels[i] != 5:
+    #         labels1.append(labels[i])
+    #         distances1.append(distances[i])
+    # if len(labels1)>=2:
+    #     ks.append(2)
+    # if len(labels1)>=4:
+    #     ks.append(2)
+    # if len(labels1)>=6:
+    #     ks.append(2)
+    # if len(labels1)>=8:
+    #     ks.append(2)
+    # if len(labels1)>=10:
+    #     ks.append(2)
+    # ks.append(len(labels1))
+    # if len(labels1) == 0:
+    #     ar = [0]
+    #     return np.array(ar)
     labels = np.array(labels)
     distances = np.array(distances)
     vals = labels[np.argsort(distances)]
+    
 
     return [_ndcg_at_k(vals, kk) for kk in ks]
 

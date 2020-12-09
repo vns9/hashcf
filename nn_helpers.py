@@ -31,7 +31,7 @@ def extract_fn(data_record):
 
     sample["i1_rating"] = tf.cast(sample["i1_rating"], tf.float32)
     sample["i2_rating"] = tf.cast(sample["i2_rating"], tf.float32)
-    sample["ogt"] = tf.cond(tf.cast(sample["i1_rating"] > sample["i2_rating"], tf.bool), lambda: (1,2), lambda: (2,1))
+    sample["ogt"] = tf.cond(tf.cast(sample["i1_rating"] > sample["i2_rating"], tf.bool), lambda: (0,1), lambda: (1,0))
 
     return tuple([sample[key] for key in ["user", "i1", "i2", "i_unrated", "i1_rating", "i2_rating", "ogt"]])
 

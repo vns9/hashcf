@@ -423,7 +423,7 @@ if __name__ == "__main__":
 
     for u in tqdm(range(num_users)):
         user_ratings = user2items[u]
-        shuffle(user_ratings)
+        #shuffle(user_ratings)
 
         M = len(user_ratings)
         train_ratings = user_ratings[:train_split(len(user_ratings))]
@@ -432,7 +432,7 @@ if __name__ == "__main__":
         # sample M random unrated items from each
         user_ratings = set(user_ratings)
         remaining_items = list(all_items - user_ratings)
-        shuffle(remaining_items)
+        #shuffle(remaining_items)
 
         train_unrated = remaining_items[:train_split(len(remaining_items))][:M]
         test_unrated  = remaining_items[train_split(len(remaining_items)):][:M]

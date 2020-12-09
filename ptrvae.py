@@ -16,13 +16,13 @@ from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import nn_ops
 import numpy as np
 from tensorflow.losses import compute_weighted_loss, Reduction
+from helpers import ndcg_score, mrr, hit
 
 
 class Model():
     def __init__(self, sample, args):
         self.sample = sample
         self.batchsize = args["batchsize"]
-        self.lstmcell = tf.nn.rnn_cell.BasicLSTMCell(args["bits"])
 
     def _make_embedding(self, vocab_size, embedding_size, name, trainable=True):
         W = tf.Variable(tf.random_uniform(shape=[vocab_size, embedding_size], minval=-1, maxval=1),
@@ -196,16 +196,72 @@ class Model():
         e = tf.random.normal([batchsize, args["bits"]])
         user_noisy_content_hashcode = tf.math.multiply(e, sigma_anneal_vae) + user_content_hashcode
 
-        ptrinp = tf.stack([tf.math.multiply(user_content_cont, i1_content_cont), tf.math.multiply(user_content_cont, i2_content_cont)])
+        ptrinp = tf.stack([tf.math.multiply(user_content_hashcode, i1_content_hashcode), tf.math.multiply(user_content_hashcode, i2_content_hashcode)])
         ptrinp = tf.reshape(ptrinp, [args["batchsize"], 2, args["bits"]])
 
-        (e_output, e_state) = tf.nn.dynamic_rnn(cell = self.lstmcell, inputs = ptrinp, dtype=tf.float32)
-        e_state = tf.reshape(e_state, [args["batchsize"], 2, args["bits"]])
-        (d_output, d_state) = tf.nn.dynamic_rnn(cell = self.lstmcell, inputs = e_state, dtype=tf.float32)
+        encoder_lstmcell = tf.nn.rnn_cell.BasicLSTMCell(args["bits"], reuse=tf.AUTO_REUSE)
+        decoder_lstmcell1 = tf.nn.rnn_cell.BasicLSTMCell(args["bits"], reuse=tf.AUTO_REUSE)
+        decoder_lstmcell2 = tf.nn.rnn_cell.BasicLSTMCell(args["bits"], reuse=tf.AUTO_REUSE)
 
-        #i1r_onehot = tf.one_hot(tf.cast(i1r, tf.uint8), 5)
-        #i2r_onehot = tf.one_hot(tf.cast(i2r, tf.uint8), 5)
-        #rgt = tf.cond(tf.cast(i1r>i2r, tf.bool), lambda: tf.stack([i1r_onehot, i2r_onehot]), lambda: tf.stack([i2r_onehot, i1r_onehot]))
+        (e_output, e_state) = tf.nn.dynamic_rnn(cell = encoder_lstmcell, inputs = ptrinp, dtype=tf.float32)
+        (d1_output, d1_state) = tf.nn.dynamic_rnn(cell = decoder_lstmcell1, inputs = e_output, dtype=tf.float32)
+        (d2_output, d2_state) = tf.nn.dynamic_rnn(cell = decoder_lstmcell2, inputs = d1_output, initial_state = d1_state,  dtype=tf.float32)
+        
+        W1 = tf.Variable(tf.random.normal(shape=[args["bits"], 1]), trainable=True)
+        W2 = tf.Variable(tf.random.normal(shape=[args["bits"], 1]), trainable=True)
+
+        d1h,_ = d1_state
+        d2h,_ = d2_state
+
+        d1h = tf.cast(tf.reshape(d1h, [args["batchsize"], args["bits"]]), dtype=tf.float32)
+        d2h = tf.cast(tf.reshape(d2h, [args["batchsize"], args["bits"]]), dtype=tf.float32)
+
+        item1 = tf.matmul(tf.math.multiply(user_content_hashcode, i1_content_hashcode), W2)
+        item1 = tf.cast(item1, tf.float32)
+
+        item2 = tf.matmul(tf.math.multiply(user_content_hashcode, i2_content_hashcode), W2)
+        item2 = tf.cast(item2, tf.float32)
+        
+        i1_pred = tf.math.softmax(tf.stack([tf.matmul(d1h, W1) + item1, tf.matmul(d1h, W1) + item2], axis=-1))
+        i2_pred = tf.math.softmax(tf.stack([tf.matmul(d2h, W1) + item1, tf.matmul(d2h, W1) + item2], axis=-1))
+        
+        ogt = tf.reshape(ogt, [args["batchsize"],2])
+        ogt_positions = ogt
+        ogt = tf.one_hot(ogt, depth=2)
+        ogt1, ogt2 = tf.split(ogt, num_or_size_splits=2, axis=-1)
+        ogt1 = tf.reshape(ogt1, [args["batchsize"],2])
+        ogt2 = tf.reshape(ogt2, [args["batchsize"],2])
+
+        '''
+        l1 = tf.keras.losses.MSE(ogt1, i1_pred)
+        l2 = tf.keras.losses.MSE(ogt2, i2_pred)'''
+        
+        
+        cce = tf.keras.losses.CategoricalCrossentropy()
+        l1 = cce(ogt1, i1_pred)
+        l2 = cce(ogt2, i2_pred)
+        
+        i1_discrete = tf.argmax(i1_pred, dimension=-1, output_type = tf.int32)
+        i2_discrete = tf.argmax(i2_pred, dimension=-1, output_type = tf.int32)
+
+        i_rankings = tf.stack([i1_discrete, i2_discrete], axis=-1)
+        i_rankings = tf.reshape(i_rankings, [args['batchsize'],2])
+
+        l1_act = i_rankings
+        l2_act = ogt_positions
+
+        '''
+        (e_output, e_state) = tf.nn.dynamic_rnn(cell = self.lstmcell, inputs = ptrinp, dtype=tf.float32)
+        e_state = tf.reshape(e_state, [args["batchsize"], tf.size(e_state)/(args["batchsize"]*args["bits"]), args["bits"]])
+        (d_output, d_state) = tf.nn.dynamic_rnn(cell = self.lstmcell, inputs = e_state, dtype=tf.float32)
+        '''
+        '''
+        i1r_onehot = tf.one_hot(tf.cast(i1r, tf.uint8), 5)
+        i2r_onehot = tf.one_hot(tf.cast(i2r, tf.uint8), 5)
+        rgt = tf.cond(tf.cast(i1r>i2r, tf.bool), lambda: tf.stack([i1r_onehot, i2r_onehot]), lambda: tf.stack([i2r_onehot, i1r_onehot]))
+        '''
+        '''
+        # original pointer network without context attention
         ogt = tf.reshape(ogt, [args["batchsize"],2])
         ogt = tf.one_hot(ogt, depth=2)
         ogt1, ogt2 = tf.split(ogt, num_or_size_splits=2, axis=1)
@@ -222,10 +278,19 @@ class Model():
         i1_pred = tf.reshape(i1_pred, [args["batchsize"],2])
         i2_pred = tf.reshape(i2_pred, [args["batchsize"],2])
         cce = tf.keras.losses.CategoricalCrossentropy()
+        
         l1 = cce(ogt1, i1_pred)
         l2 = cce(ogt2, i2_pred)
         
-        
+        i1_discrete = tf.argmax(i1_pred, dimension=1)
+        i2_discrete = tf.argmax(i2_pred, dimension=1)
+
+        ogt1 = tf.argmax(ogt1, dimension=1)
+        ogt2 = tf.argmax(ogt2, dimension=1)
+
+        l1_act = tf.reduce_mean(tf.math.pow((i1_discrete - ogt1), 2))
+        l2_act = tf.reduce_mean(tf.math.pow((i2_discrete - ogt2), 2))
+        '''
         decoder_dim = 512
 
         i1_decoded = item_decoder(i1_noisy_content_hashcode, args["vae_units"], args["vae_layers"], decoder_dim)
@@ -241,8 +306,9 @@ class Model():
         nonzero_bits = args["bits"]
 
         def make_total_loss(i1_org, i1r, anneal):
+            e0 = tf.random.normal([batchsize], stddev=1.0, name='normaldis0')
             i1 = i1_org
-            i1r = i1r 
+            i1r = i1r
             i1r_m = 2*nonzero_bits * (i1r/max_rating) - nonzero_bits
             dot_i1 = tf.reduce_sum(user_content_hashcode * i1, axis=-1)
             sqr_diff = tf.math.pow((i1r_m - dot_i1)/nonzero_bits, 2)
@@ -269,4 +335,4 @@ class Model():
         
         loss_vae = user_reconloss + i1_reconloss
 
-        return total_loss, reconloss, ham_dist_i1, i1_org_m_noselfmask, user_m, loss_vae
+        return total_loss, reconloss, ham_dist_i1, i1_org_m_noselfmask, user_m, loss_vae, l1_act, l2_act
