@@ -12,7 +12,7 @@ import gzip
 import json
 import codecs
 import tensorflow as tf
-import os
+import os, sys
 import tensorflow_hub as hub
 os.environ["TFHUB_CACHE_DIR"] = './tfhub_modules'
 import nltk
@@ -150,9 +150,12 @@ if __name__ == "__main__":
             user = row["reviewerID"]
             item = row["asin"]
             rating = int(row["overall"])
+            if rating == 5:
+                continue
             sent = " "
             if "reviewText" in row:
                 sent+=row["reviewText"]
+            '''
             no_punct = ""
             for char in sent:
                 if char not in punctuations:
@@ -163,6 +166,7 @@ if __name__ == "__main__":
             if len(sent) > 50:
                 del sent[-50:]
             sent = " ".join(sent)
+            '''
             timepoint = 0
             data.append([user, item, rating, timepoint, sent])
     elif "yelp" in input_path:
@@ -186,6 +190,8 @@ if __name__ == "__main__":
             item = tmp_item_idx_dict[item]
 
             rating = int(row["stars"])
+            if rating == 5:
+                continue
             timepoint = 0#int(row["date"])
             review = row["text"]
             
@@ -300,7 +306,7 @@ if __name__ == "__main__":
 
     #loadGloveModel("glove.6B.50d.txt")
 
-    '''
+    ''' 
     for i in range(len(item2reviews)):
         no_punct = ""
         item2reviews[i] = " ".join(item2reviews[i])
@@ -328,12 +334,13 @@ if __name__ == "__main__":
             del user2reviews[i][-50:]
         user2reviews[i] = " ".join(user2reviews[i])
     '''
+    
 
     for i in range(len(item2reviews)):
-        item2reviews[i] = " ".join(item2reviews[i])
+       item2reviews[i] = " ".join(item2reviews[i])
     
     for i in range(len(user2reviews)):
-        user2reviews[i] = " ".join(user2reviews[i])
+       user2reviews[i] = " ".join(user2reviews[i])
 
     
     tf.reset_default_graph()
@@ -341,19 +348,67 @@ if __name__ == "__main__":
     # Universal sentence encoder
     user2reviews1 = None
     item2reviews1 = None
+
+    sess = tf.Session()
+    embed = hub.Module("https://tfhub.dev/google/universal-sentence-encoder/1")
+    sess.run(tf.initialize_all_variables())
+    sess.run(tf.tables_initializer())
+
+    def usembed(x, sess, embed):
+        #with tf.Session(graph = graph) as sess:
+        ans = embed(x)
+        ans = tf.reshape(ans, (tf.size(ans)/512, 512))
+        ans = sess.run(ans)
+        return ans
+
+    xl = [item2reviews[i:i + 200] for i in range(0, len(item2reviews), 200)] 
+    yl = [user2reviews[i:i + 200] for i in range(0, len(user2reviews), 200)] 
+
+    for y in yl:
+        y = usembed(y, sess, embed)
+        if user2reviews1 is None:
+            user2reviews1 = y
+        else:
+            #print('OK')
+            user2reviews1 = np.concatenate((user2reviews1, y), axis=0) 
+
+    #print("user done")
+    #sys.exit()
+    
+    for x in xl:
+        x = usembed(x, sess, embed)
+        if item2reviews1 is None:
+            item2reviews1 = x
+        else:
+            item2reviews1 = np.concatenate((item2reviews1, x), axis=0) 
+    
+    #print("item done")
+    
+    
+
+    '''
     with tf.Session(graph = graph) as sess:
         embed = hub.Module("https://tfhub.dev/google/universal-sentence-encoder/1")
         sess.run(tf.initialize_all_variables())
         sess.run(tf.tables_initializer())
-        item2reviews1 = embed(item2reviews)
+        
+        def use_embed(x):
+            return embed(x)
+    
+        
+        item2reviews1 = embed(x)#tf.map_fn(use_embed, tf.convert_to_tensor(item2reviews))
         item2reviews1 = tf.reshape(item2reviews1, (num_items, 512))
+        
         #item2reviews1 = tf.zeros([num_items, 512], tf.float32)
         item2reviews1 = sess.run(item2reviews1)
-        user2reviews1 = embed(user2reviews)
+        user2reviews1 = embed(y)#embed(user2reviews)
         user2reviews1 = tf.reshape(user2reviews1, (num_users, 512))
         #user2reviews1 = tf.zeros([num_users, 512], tf.float32)
         user2reviews1 = sess.run(user2reviews1)
     
+    print("allocation done")
+    sys.exit()
+    '''
     
     
     '''

@@ -6,6 +6,7 @@ tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 import pickle
 import glob
 import os
+os.environ['KMP_WARNINGS'] = 'off'
 from nn_helpers import generator
 from ptrvae import Model as pModel
 import numpy as np
@@ -19,7 +20,6 @@ from scipy.io import loadmat
 from scipy.special import entr
 import time
 import pandas as pd
-from sklearn.metrics import ndcg_score as ndcg_score1
 import statistics
 
 
@@ -41,8 +41,10 @@ def onepass_test(sess, eval_list, l1_act, l2_act, some_handle, num_samples, eval
 
     all_item_ids = []
     all_user_ids = []
-    l1list = []
-    l2list = []
+    #l1list = []
+    #l2list = []
+    cnt = 0
+    tcnt = 0
     while not valdone:
         [lossval, hamdist, userval, item_ratingval, itemsample, item_emb, user_emb, \
             lossval_recon], l1_act_val, l2_act_val = sess.run([eval_list, l1_act, l2_act], feed_dict={handle: some_handle, is_training: False,
@@ -51,14 +53,22 @@ def onepass_test(sess, eval_list, l1_act, l2_act, some_handle, num_samples, eval
                                                                         batch_placeholder: min(20000, eval_batchsize)})
 
         temp_list = []
+        #l1list.append(l1_act_val)
+        #l2list.append(l2_act_val)
+        '''
         for i in range(l1_act_val.shape[0]):
-                t1 = [x+1 for x in l1_act_val[i]]
-                t2 = [x+1 for x in l2_act_val[i]]
-                print(t1)
-                print(t2)
-                temp_list.append(ndcg_score(t1, t2))
-        l1list.append(statistics.mean(temp_list))
-        l2list.append(0)
+            if l1_act_val[i][0] != l2_act_val[i][0]:
+                tcnt+=1
+            if l1_act_val[i][0] == l2_act_val[i][0]:
+                tcnt+=1
+                cnt+=1
+            if l1_act_val[i][1] != l2_act_val[i][1]:
+                tcnt+=1
+            if l1_act_val[i][1] == l2_act_val[i][1]:
+                tcnt+=1
+                cnt+=1
+        '''
+                    
         valcounter += 1
         total -= len(userval)
 
@@ -77,13 +87,11 @@ def onepass_test(sess, eval_list, l1_act, l2_act, some_handle, num_samples, eval
 
             all_item_ids.append(item)
             all_user_ids.append(user)
+
     print('valcounter ', valcounter)
-    #assert(total == 0)
-    assert(len(set(all_user_ids)) == num_users)
-    #assert(len(set(all_item_ids)) == num_items)
     
     ndcgs, mse = eval_hashing(full_matrix_ratings, test_samples[0], item_matrix, user_matrix, num_users, num_items, all_user_ids, all_item_ids, args)
-    print('PTR NDCG - ',np.mean(l1list))
+    #print('MSE - ', np.mean(l1list), np.mean(l2list))
     return np.mean(ndcgs,0), mse, item_matrix, user_matrix
 
 def eval_hashing(full_matrix_ratings, test_samples, item_matrix, user_matrix, num_users, num_items, user_list, item_list, args):
@@ -104,7 +112,7 @@ def eval_hashing(full_matrix_ratings, test_samples, item_matrix, user_matrix, nu
         pgti = items_gt / items_gt.sum()
         shannon = -np.sum(pgti*np.log2(pgti))
         gt_entropies.append(shannon)
-        if shannon>6.2:
+        if shannon>3.0:
             inps.append([items_gt, args["bits"]-ham_dists])
             #print(items_gt)
         tmp_gt = 2*args["bits"] * items_gt/5.0 - args["bits"]
@@ -116,7 +124,7 @@ def eval_hashing(full_matrix_ratings, test_samples, item_matrix, user_matrix, nu
     ndcgs = [ndcg_score(inp[0], inp[1]) for inp in inps]
     return ndcgs, np.mean(mses)
 
-
+'''
 def onepass(sess, eval_list, some_handle, num_samples, eval_batchsize, handle, anneal_val, anneal_val_vae, batch_placeholder, is_training, force_selfmask, args):
     losses_val = []
     losses_val_recon = []
@@ -183,6 +191,7 @@ def onepass(sess, eval_list, some_handle, num_samples, eval_batchsize, handle, a
 
     return np.mean(losses_val), np.mean(ndcgs, 0), np.mean(losses_val_recon), \
            np.mean(losses_val_uneq), np.mean(losses_val_eq), len(ndcgs), ndcgs, np.mean(losses_val_vae)
+'''
 
 def main():
     parser = argparse.ArgumentParser()
@@ -192,7 +201,7 @@ def main():
     parser.add_argument("--vae_units", default=200, type=int) 
     parser.add_argument("--vae_layers", default=4, type=int) 
     parser.add_argument("--dataset", default="software5c", type=str) 
-    parser.add_argument("--vae_weight", default=1.0, type=float) 
+    parser.add_argument("--vae_weight", default=0.000001, type=float) 
     parser.add_argument("--mul", default=6, type=float) 
     parser.add_argument("--anneal_val", default=1.0, type=float)
     parser.add_argument("--decay_rate", default=0.9, type=float)
@@ -201,7 +210,7 @@ def main():
     parser.add_argument("--deterministic_train", default=1, type=int)
     parser.add_argument("--optimize_selfmask", default=0, type=int)
     parser.add_argument("--usermask_nograd", default=0, type=int)
-    parser.add_argument("--KLweight", default=1.0, type=float)
+    parser.add_argument("--KLweight", default=0.000001, type=float)
     parser.add_argument("--force_selfmask", default=0, type=int)
     parser.add_argument("--save_vectors", default=0, type=int)
     parser.add_argument("--realvalued", default=0, type=int)
@@ -222,6 +231,8 @@ def main():
     args.save_vectors = args.save_vectors > 0.5
 
     args = vars(args)
+    fprint(args["ofile"], "============================================================")
+    print("============================================================")
     print("Proposed model")
     print(args)
     fprint(args["ofile"], "Proposed model")
@@ -243,6 +254,11 @@ def main():
     train_samples = sum(1 for _ in tf.python_io.tf_record_iterator(trainfiles[0]))
     val_samples = sum(1 for _ in tf.python_io.tf_record_iterator(valfiles[0]))
     test_samples = sum(1 for _ in tf.python_io.tf_record_iterator(testfiles[0]))
+
+    print("Train data points - ",train_samples)
+    print("Users - ", num_users)
+    print("Items - ", num_items)
+    #fprint(args["ofile"], "Train data points - ", train_samples)
 
     datamatlab = loadmat(args["dataset"]+"/ratings_contentaware_full.mat")
     item_content_matrix = datamatlab["item_features"]
@@ -284,10 +300,7 @@ def main():
 
         step = tf.Variable(0, trainable=False)
         lr = tf.train.exponential_decay(args["lr"], step, 100000, args["decay_rate"], staircase=True, name="lr")
-        #optimizer = tf.train.GradientDescentOptimizer(learning_rate=args["lr"], name='GradientDescent')
         optimizer = tf.train.AdamOptimizer(learning_rate=args["lr"], name="Adam")
-        #optimizer = tf.train.RMSPropOptimizer(lr, name="RMS")
-        #optimizer = tf.train.MomentumOptimizer(lr, momentum=0.9, name="sgd_momentum")
         train_step = optimizer.minimize(loss, global_step=step)
         
         sess.run(tf.global_variables_initializer())
@@ -306,14 +319,13 @@ def main():
         anneal = args["anneal_val"]
         anneal_vae = args["annealing_max"]
 
-
         best_val_ndcg = 0
         best_val_loss = np.inf
         patience = 5
 
         patience_counter = 0 #Early stopping
         running = True
-        print("TRAINING")
+        print("training")
         all_val_ndcg = []
         while running:
             start = time.time()
@@ -326,14 +338,12 @@ def main():
             losses_train_no_anneal.append(loss_no_anneal_val)
             reconlosses_train.append(reconlossval)
             temp_list = []
-            for i in range(l1_act_val.shape[0]):
-                temp_list.append(np.mean(ndcg_score(l1_act_val[i], l2_act_val[i])))
-            l1_act_list.append(statistics.mean(temp_list))
+            l1_act_list.append(l1_act_val)
             l2_act_list.append(l2_act_val)
             counter += 1
             anneal_vae = max(anneal_vae-args["annealing_decrement"], args["annealing_min"])
             anneal = anneal * 0.9999
-            if counter % 1000 == 0: 
+            if counter % 480 == 0: 
                 print("train", np.mean(l1_act_list), np.mean(l2_act_list), np.mean(losses_train), np.mean(losses_train_no_anneal), np.mean(reconlosses_train))#, counter * args["batchsize"] / train_samples, np.mean(times), anneal)
                 fprint(args["ofile"], " ".join([str(v) for v in ["train", np.mean(losses_train), np.mean(losses_train_no_anneal), counter * args["batchsize"] / train_samples, np.mean(times), anneal]]) )
                 losses_train = []

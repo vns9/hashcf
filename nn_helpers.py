@@ -38,14 +38,8 @@ def extract_fn(data_record):
 def generator(sess, handle, batchsize, record_paths, is_test):
 
     output_t = tuple([tf.int32, tf.int32, tf.int32, tf.int32, tf.float32, tf.float32, (tf.int32, tf.int32)])
-    #s = tf.TensorShape([None,])
-    #output_s = tuple([s for _ in output_t])
-
     dataset = tf.data.Dataset.from_tensor_slices(record_paths)
-    #if not is_test:   
     dataset = dataset.repeat()
-    #else:
-    #    dataset = dataset.repeat(2)
     dataset = dataset.shuffle(100)
     dataset = dataset.flat_map(tf.data.TFRecordDataset)
     dataset = dataset.map(extract_fn, num_parallel_calls=3)
@@ -59,4 +53,3 @@ def generator(sess, handle, batchsize, record_paths, is_test):
     specific_handle = sess.run(iterator.string_handle())
 
     return specific_handle, iterator, generic_iter
-

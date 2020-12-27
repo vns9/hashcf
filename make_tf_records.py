@@ -58,20 +58,13 @@ def make_all_pairs(ratings, notrated, full_matrix, pairs):
         for i in range(num_items):
             i1 = items[i]
             i1_rating = int(full_matrix[user, i1])
-
-            matches_found = 0
-            for j in np.random.permutation(num_items):  # range(i, num_items):#num_items):
+            for j in np.random.permutation(num_items):  
                 i2 = items[j]
                 i_unrated = unrated_items[j % num_unrated_items]
-
-                i2_rating = int(full_matrix[user, i2])
-
-                matches_found += 1
-                sample = [user, i1, i2, i_unrated, i1_rating, i2_rating]
-                samples.append(sample)
-
-                assert (i1_rating > 0 and i2_rating > 0)
-                if matches_found >= pairs:
+                if(full_matrix[user, i2] != i1_rating):
+                    i2_rating = int(full_matrix[user, i2])
+                    sample = [user, i1, i2, i_unrated, i1_rating, i2_rating]
+                    samples.append(sample)
                     break
 
     shuffle(samples)
