@@ -90,9 +90,12 @@ def onepass_test(sess, eval_list, l1_act, l2_act, some_handle, num_samples, eval
 
     print('valcounter ', valcounter)
     
-    ndcgs, mse = eval_hashing(full_matrix_ratings, test_samples[0], item_matrix, user_matrix, num_users, num_items, all_user_ids, all_item_ids, args)
-    #print('MSE - ', np.mean(l1list), np.mean(l2list))
-    return np.mean(ndcgs,0), mse, item_matrix, user_matrix
+    ndcgs, mrrs, mse = eval_hashing(full_matrix_ratings, test_samples[0], item_matrix, user_matrix, num_users, num_items, all_user_ids, all_item_ids, args)
+    with open("../proposed_ndcg.txt", 'w') as f:
+        np.savetxt(f, ndcgs)
+    with open("../proposed_mrrs.txt", 'w') as f:
+        np.savetxt(f, mrrs)
+    return np.mean(ndcgs,0), np.mean(mrrs,0), mse, item_matrix, user_matrix
 
 def eval_hashing(full_matrix_ratings, test_samples, item_matrix, user_matrix, num_users, num_items, user_list, item_list, args):
     inps = []
@@ -121,8 +124,9 @@ def eval_hashing(full_matrix_ratings, test_samples, item_matrix, user_matrix, nu
     describer = pd.DataFrame(np.array(gt_entropies))
     print(describer.describe())
     #print(gt_entropies)
-    ndcgs = [ndcg_score(inp[0], inp[1]) for inp in inps]
-    return ndcgs, np.mean(mses)
+    ndcgs = [ndcg_score(inp[0], inp[1]) for inp in inps] #ndcg
+    mrrs = [mrr(inp[0], inp[1]) for inp in inps]
+    return ndcgs, mrrs, np.mean(mses)
 
 '''
 def onepass(sess, eval_list, some_handle, num_samples, eval_batchsize, handle, anneal_val, anneal_val_vae, batch_placeholder, is_training, force_selfmask, args):
@@ -201,7 +205,7 @@ def main():
     parser.add_argument("--vae_units", default=200, type=int) 
     parser.add_argument("--vae_layers", default=4, type=int) 
     parser.add_argument("--dataset", default="software5c", type=str) 
-    parser.add_argument("--vae_weight", default=0.000001, type=float) 
+    parser.add_argument("--vae_weight", default=0, type=float) 
     parser.add_argument("--mul", default=6, type=float) 
     parser.add_argument("--anneal_val", default=1.0, type=float)
     parser.add_argument("--decay_rate", default=0.9, type=float)
@@ -210,7 +214,7 @@ def main():
     parser.add_argument("--deterministic_train", default=1, type=int)
     parser.add_argument("--optimize_selfmask", default=0, type=int)
     parser.add_argument("--usermask_nograd", default=0, type=int)
-    parser.add_argument("--KLweight", default=0.000001, type=float)
+    parser.add_argument("--KLweight", default=0.00000001, type=float)
     parser.add_argument("--force_selfmask", default=0, type=int)
     parser.add_argument("--save_vectors", default=0, type=int)
     parser.add_argument("--realvalued", default=0, type=int)
@@ -258,18 +262,23 @@ def main():
     print("Train data points - ",train_samples)
     print("Users - ", num_users)
     print("Items - ", num_items)
-    #fprint(args["ofile"], "Train data points - ", train_samples)
-
+    
     datamatlab = loadmat(args["dataset"]+"/ratings_contentaware_full.mat")
     item_content_matrix = datamatlab["item_features"]
     user_content_matrix = datamatlab["user_features"]
+    item2rev = datamatlab["item2rev"]
     tf.reset_default_graph()
     item_content_matrix = tf.convert_to_tensor(item_content_matrix)
     user_content_matrix = tf.convert_to_tensor(user_content_matrix)
+    item_reviews = tf.convert_to_tensor(item2rev)
     
     with tf.Session() as sess:
         sess.run(item_content_matrix)
         sess.run(user_content_matrix)
+        sess.run(item_reviews)
+
+        item_reviews = tf.reshape(item_reviews, [num_items, 5, 512])
+        #item_reviews = tf.zeros([1])
 
         handle = tf.placeholder(tf.string, shape=[], name="handle_iterator")
         training_handle, train_iter, gen_iter = generator(sess, handle, args["batchsize"], trainfiles, 0)
@@ -295,7 +304,7 @@ def main():
         importance_embedding_matrix = model.make_importance_embedding(8000)
         content_matrix = item_content_matrix
         loss, loss_no_anneal, scores, item_embedding, user_embedding, \
-            reconloss, l1_act, l2_act = model.make_network(sess, word_embedding_matrix, importance_embedding_matrix, user_content_matrix, item_content_matrix, item_emb_matrix, user_emb_matrix,
+            reconloss, l1_act, l2_act = model.make_network(sess, item_reviews, word_embedding_matrix, importance_embedding_matrix, user_content_matrix, item_content_matrix, item_emb_matrix, user_emb_matrix,
                                            is_training, args, max_rating, anneal_val, anneal_val_vae, batch_placeholder, ogt)
 
         step = tf.Variable(0, trainable=False)
@@ -343,7 +352,7 @@ def main():
             counter += 1
             anneal_vae = max(anneal_vae-args["annealing_decrement"], args["annealing_min"])
             anneal = anneal * 0.9999
-            if counter % 480 == 0: 
+            if counter % 480 == 0: #480
                 print("train", np.mean(l1_act_list), np.mean(l2_act_list), np.mean(losses_train), np.mean(losses_train_no_anneal), np.mean(reconlosses_train))#, counter * args["batchsize"] / train_samples, np.mean(times), anneal)
                 fprint(args["ofile"], " ".join([str(v) for v in ["train", np.mean(losses_train), np.mean(losses_train_no_anneal), counter * args["batchsize"] / train_samples, np.mean(times), anneal]]) )
                 losses_train = []
@@ -352,36 +361,19 @@ def main():
                 reconlosses_train = []
                 l1_act_list = []
                 l2_act_list = []
-                '''
-                sess.run(val_iter.initializer)
-                losses_val, val_ndcg, losses_val_recon, losses_val_uneq, losses_val_eq, NN, allndcgs, losses_val_vae = onepass(sess, eval_list, val_handle, val_samples, eval_batchsize, handle, anneal_val, anneal_val_vae, batch_placeholder, is_training, args["force_selfmask"], args)
-                print("val\t\t", val_ndcg, [losses_val, losses_val_recon, losses_val_uneq, losses_val_eq], NN, losses_val_vae)
-                save_val_ndcg = val_ndcg
-                fprint(args["ofile"], " ".join([str(v) for v in ["val\t\t", val_ndcg, [losses_val, losses_val_recon, losses_val_uneq, losses_val_eq], NN]]) )
-
-                all_val_ndcg.append(best_val_ndcg)
-                if val_ndcg[-1] > best_val_ndcg:
-                    best_val_ndcg = val_ndcg[-1]
-                    best_val_loss = losses_val
-                    patience_counter = 0
-                else:
-                    patience_counter += 1
-                '''
-                #if patience_counter == 0:
+                
                 sess.run(test_iter.initializer)
-                test_ndcgs, test_mse, user_matrix_vals, item_matrix_vals = onepass_test(sess, eval_list, l1_act, l2_act, test_handle,
+                test_ndcgs, test_mrrs, test_mse, user_matrix_vals, item_matrix_vals = onepass_test(sess, eval_list, l1_act, l2_act, test_handle,
                                 test_samples, eval_batchsize,
                                 handle, anneal_val, anneal_val_vae, batch_placeholder,
                                 is_training, args["force_selfmask"], args,
                                 num_items, num_users,
                                 datamatlab["full_matrix"], datamatlab["test_rated_total"])
-                print("test\t\t\t\t",  test_ndcgs, test_mse)
-                fprint(args["ofile"], " ".join([str(v) for v in ["test\t\t\t\t", test_ndcgs, test_mse]]))
-                
-                if patience_counter >= patience:
-                    running = False
-                print("patience", patience_counter, "/", patience, (datetime.datetime.now()))
-                fprint(args["ofile"], " ".join([str(v) for v in ["patience", patience_counter, "/", patience, (datetime.datetime.now())]]))
+                print("test\t\t\t\t",  test_ndcgs, test_mrrs, test_mse)
+                fprint(args["ofile"], " ".join([str(v) for v in ["test\t\t\t\t", test_ndcgs, test_mrrs, test_mse]]))
+                print(datetime.datetime.now())
+                fprint(args["ofile"], datetime.datetime.now())
+
 if __name__ == "__main__":
     pool = mp.Pool(4)
     main()

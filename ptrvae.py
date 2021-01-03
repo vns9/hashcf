@@ -32,11 +32,17 @@ class Model():
         embedding_init = W.assign(embedding_placeholder)
         return (W, embedding_placeholder, embedding_init)
 
-    def _extract(self,sess,  item_emb, user_emb, user_content_matrix, item_content_matrix, batchsize):
+    def _extract(self, sess, attn_lstmcell, item_reviews, item_emb, user_emb, user_content_matrix, item_content_matrix, batchsize):
         user, i1, i2, iu, i1r, i2r = self.sample[0], self.sample[1], self.sample[2], self.sample[3], self.sample[4], self.sample[5]
+        
         user_content_feature_vector = tf.nn.embedding_lookup(user_content_matrix, user)
         item_content_feature_vector1 = tf.nn.embedding_lookup(item_content_matrix, i1)
         item_content_feature_vector2 = tf.nn.embedding_lookup(item_content_matrix, i2)
+        all_item_reviews = tf.nn.embedding_lookup(item_reviews, i1)
+        all_item_reviews = tf.reshape(all_item_reviews, [tf.size(all_item_reviews)/(5*512),5,512])
+        (output, state) = tf.nn.dynamic_rnn(cell = attn_lstmcell, inputs = all_item_reviews, dtype=tf.float32)
+        mystate, _ = state        
+        item_content_feature_vector1 = mystate#tf.math.multiply(user_content_feature_vector,mystate)
         user = tf.nn.embedding_lookup(user_emb, user) 
         i1 = tf.nn.embedding_lookup(item_emb, i1)
         order_gt = self.sample[6]
@@ -74,7 +80,7 @@ class Model():
                         trainable=trainable, name="importance_embedding")
         return W
 
-    def make_network(self,sess, word_emb_matrix, importance_emb_matrix, user_content_matrix, item_content_matrix, item_emb, user_emb, is_training, args, max_rating, sigma_anneal, sigma_anneal_vae, batchsize, ogt):
+    def make_network(self, sess, item_reviews, word_emb_matrix, importance_emb_matrix, user_content_matrix, item_content_matrix, item_emb, user_emb, is_training, args, max_rating, sigma_anneal, sigma_anneal_vae, batchsize, ogt):
         ## ref code: https://r2rt.com/binary-stochastic-neurons-in-tensorflow.html
         def bernoulliSample(x):
             """
@@ -177,8 +183,9 @@ class Model():
 
             return doc_layer
 
-        user, i1, i1r, i2, i2r, user_content, i1_content, i2_content, ogt = self._extract(sess, item_emb, user_emb, user_content_matrix, item_content_matrix, batchsize)
-        i1_content = tf.reshape(i1_content, [batchsize, 512])
+        attn_lstmcell = tf.nn.rnn_cell.LSTMCell(512, reuse=tf.AUTO_REUSE) 
+        user, i1, i1r, i2, i2r, user_content, i1_content, i2_content, ogt = self._extract(sess, attn_lstmcell, item_reviews, item_emb, user_emb, user_content_matrix, item_content_matrix, batchsize)
+        i1_content = tf.reshape(i1_content, [batchsize, 512]) #128
         i2_content = tf.reshape(i2_content, [batchsize, 512])
         user_content = tf.reshape(user_content, [batchsize, 512])
 
@@ -186,54 +193,53 @@ class Model():
         e = tf.random.normal([batchsize, args["bits"]])
         i1_noisy_content_hashcode = tf.math.multiply(e, sigma_anneal_vae) + i1_content_hashcode
 
-        i2_content_hashcode, i2_content_cont = item_encoder(i2_content, args["vae_units"], args["vae_layers"])
-        e = tf.random.normal([batchsize, args["bits"]])
-        i2_noisy_content_hashcode = tf.math.multiply(e, sigma_anneal_vae) + i2_content_hashcode
+        #i2_content_hashcode, i2_content_cont = item_encoder(i2_content, args["vae_units"], args["vae_layers"])
+        #e = tf.random.normal([batchsize, args["bits"]])
+        #i2_noisy_content_hashcode = tf.math.multiply(e, sigma_anneal_vae) + i2_content_hashcode
 
         user_content_hashcode, user_content_cont = user_encoder(user_content, args["vae_units"], args["vae_layers"])
         e = tf.random.normal([batchsize, args["bits"]])
         user_noisy_content_hashcode = tf.math.multiply(e, sigma_anneal_vae) + user_content_hashcode
 
-        ptrinp = tf.stack([tf.concat(axis = -1, values=[user_content_hashcode, i1_content_hashcode]), tf.concat(axis = -1, values=[user_content_hashcode, i2_content_hashcode])])
-        ptrinp = tf.reshape(ptrinp, [args["batchsize"], 2, 2*args["bits"]])
-
-        # Pointer Network https://arxiv.org/abs/1511.06391
-        encoder_lstmcell = tf.nn.rnn_cell.BasicLSTMCell(2*args["bits"], reuse=tf.AUTO_REUSE)
-        decoder_lstmcell1 = tf.nn.rnn_cell.BasicLSTMCell(2*args["bits"], reuse=tf.AUTO_REUSE)
-        decoder_lstmcell2 = tf.nn.rnn_cell.BasicLSTMCell(2*args["bits"], reuse=tf.AUTO_REUSE)
-
-        (e_output, e_state) = tf.nn.dynamic_rnn(cell = encoder_lstmcell, inputs = ptrinp, dtype=tf.float32)
-        (d1_output, d1_state) = tf.nn.dynamic_rnn(cell = decoder_lstmcell1, inputs = e_output, dtype=tf.float32)
-        (d2_output, d2_state) = tf.nn.dynamic_rnn(cell = decoder_lstmcell2, inputs = d1_output, initial_state = d1_state,  dtype=tf.float32)
         
-        W1 = tf.Variable(tf.random.normal(shape=[2*args["bits"], 1]), trainable=True)
-        W2 = tf.Variable(tf.random.normal(shape=[2*args["bits"], 1]), trainable=True)
 
-        d1h,_ = d1_state
-        d2h,_ = d2_state
-
-        d1h = tf.cast(tf.reshape(d1h, [args["batchsize"], 2*args["bits"]]), dtype=tf.float32)
-        d2h = tf.cast(tf.reshape(d2h, [args["batchsize"], 2*args["bits"]]), dtype=tf.float32)
-
-        item1 = tf.matmul(tf.concat(axis = -1, values=[user_content_hashcode, i1_content_hashcode]), W2)
-        item1 = tf.cast(item1, tf.float32)
-
-        item2 = tf.matmul(tf.concat(axis = -1, values=[user_content_hashcode, i2_content_hashcode]), W2)
-        item2 = tf.cast(item2, tf.float32)
+        # ptrinp = tf.stack([tf.concat(axis = -1, values=[user_content_hashcode, i1_content_hashcode]), tf.concat(axis = -1, values=[user_content_hashcode, i2_content_hashcode])])
+        # ptrinp = tf.reshape(ptrinp, [args["batchsize"], 2, 2*args["bits"]])
+        # encoder_lstmcell = tf.nn.rnn_cell.BasicLSTMCell(2*args["bits"], reuse=tf.AUTO_REUSE)
+        # decoder_lstmcell1 = tf.nn.rnn_cell.BasicLSTMCell(2*args["bits"], reuse=tf.AUTO_REUSE)
+        # decoder_lstmcell2 = tf.nn.rnn_cell.BasicLSTMCell(2*args["bits"], reuse=tf.AUTO_REUSE)
+        # (e_output, e_state) = tf.nn.dynamic_rnn(cell = encoder_lstmcell, inputs = ptrinp, dtype=tf.float32)
+        # (d1_output, d1_state) = tf.nn.dynamic_rnn(cell = decoder_lstmcell1, inputs = e_output, dtype=tf.float32)
+        # (d2_output, d2_state) = tf.nn.dynamic_rnn(cell = decoder_lstmcell2, inputs = d1_output, initial_state = d1_state,  dtype=tf.float32)
         
-        i1_pred = tf.math.softmax(tf.math.tanh(tf.stack([tf.matmul(d1h, W1) + item1, tf.matmul(d1h, W1) + item2], axis=-1)))
-        i2_pred = tf.math.softmax(tf.math.tanh(tf.stack([tf.matmul(d2h, W1) + item1, tf.matmul(d2h, W1) + item2], axis=-1)))
+        # W1 = tf.Variable(tf.random.normal(shape=[2*args["bits"], 1]), trainable=True)
+        # W2 = tf.Variable(tf.random.normal(shape=[2*args["bits"], 1]), trainable=True)
+
+        # d1h,_ = d1_state
+        # d2h,_ = d2_state
+
+        # d1h = tf.cast(tf.reshape(d1h, [args["batchsize"], 2*args["bits"]]), dtype=tf.float32)
+        # d2h = tf.cast(tf.reshape(d2h, [args["batchsize"], 2*args["bits"]]), dtype=tf.float32)
+
+        # item1 = tf.matmul(tf.concat(axis = -1, values=[user_content_hashcode, i1_content_hashcode]), W2)
+        # item1 = tf.cast(item1, tf.float32)
+
+        # item2 = tf.matmul(tf.concat(axis = -1, values=[user_content_hashcode, i2_content_hashcode]), W2)
+        # item2 = tf.cast(item2, tf.float32)
         
-        ogt = tf.reshape(ogt, [args["batchsize"],2])
-        ogt_positions = ogt
-        ogt = tf.one_hot(ogt, depth=2)
-        ogt1, ogt2 = tf.split(ogt, num_or_size_splits=2, axis=-1)
-        ogt1 = tf.reshape(ogt1, [args["batchsize"],2])
-        ogt2 = tf.reshape(ogt2, [args["batchsize"],2])
+        # i1_pred = tf.math.softmax(tf.math.tanh(tf.stack([tf.matmul(d1h, W1) + item1, tf.matmul(d1h, W1) + item2], axis=-1)))
+        # i2_pred = tf.math.softmax(tf.math.tanh(tf.stack([tf.matmul(d2h, W1) + item1, tf.matmul(d2h, W1) + item2], axis=-1)))
         
-        cce = tf.keras.losses.CategoricalCrossentropy()
-        l1 = cce(ogt1, i1_pred)
-        l2 = cce(ogt2, i2_pred)
+        # ogt = tf.reshape(ogt, [args["batchsize"],2])
+        # ogt_positions = ogt
+        # ogt = tf.one_hot(ogt, depth=2)
+        # ogt1, ogt2 = tf.split(ogt, num_or_size_splits=2, axis=-1)
+        # ogt1 = tf.reshape(ogt1, [args["batchsize"],2])
+        # ogt2 = tf.reshape(ogt2, [args["batchsize"],2])
+        
+        # cce = tf.keras.losses.CategoricalCrossentropy()
+        # l1 = cce(ogt1, i1_pred)
+        # l2 = cce(ogt2, i2_pred)
         
         '''
         i1_discrete = tf.argmax(i1_pred, axis=-1, output_type = tf.int32)
@@ -245,8 +251,8 @@ class Model():
         i_rankings = tf.reshape(i_rankings, [args['batchsize'],2])
         '''
 
-        l1_act = tf.keras.losses.MSE(ogt1, i1_pred)
-        l2_act = tf.keras.losses.MSE(ogt2, i2_pred)
+        #l1_act = tf.keras.losses.MSE(ogt1, i1_pred)
+        #l2_act = tf.keras.losses.MSE(ogt2, i2_pred)
 
         '''
         # Pointer Network https://arxiv.org/abs/1506.03134 
@@ -281,6 +287,8 @@ class Model():
         l1_act = tf.reduce_mean(tf.math.pow((i1_discrete - ogt1), 2))
         l2_act = tf.reduce_mean(tf.math.pow((i2_discrete - ogt2), 2))
         '''
+        l1_act = tf.zeros([1])
+        l2_act = tf.zeros([1])
 
         decoder_dim = 512
 
@@ -288,7 +296,7 @@ class Model():
         user_decoded = user_decoder(user_noisy_content_hashcode, args["vae_units"], args["vae_layers"], decoder_dim)
 
         user_reconloss = tf.reduce_mean(tf.math.pow(user_decoded-user_content, 2) , axis=-1)
-        i1_reconloss = tf.reduce_mean(tf.math.pow(i1_decoded-i1_content, 2) , axis=-1)
+        i1_reconloss = tf.zeros([1])#tf.reduce_mean(tf.math.pow(i1_decoded-i1_content, 2) , axis=-1)
 
         user_content_hashcode = 2*user_content_hashcode - 1
         i1_content_hashcode = 2*i1_content_hashcode - 1
